@@ -10,14 +10,12 @@ except ImportError:
 from django import forms
 from django.utils.translation import ugettext_lazy as _
 
-try:
-    from django.contrib.auth import get_user_model  # Django 1.5
-except ImportError:
-    from account.future_1_5 import get_user_model
 from django.contrib import auth
 
+from account.compat import get_user_model, get_user_lookup_kwargs
 from account.conf import settings
-from account.models import EmailAddress, SignupCode
+from account.hooks import hookset
+from account.models import EmailAddress
 
 
 alnum_re = re.compile(r"^\w+$")
@@ -50,11 +48,13 @@ class SignupForm(forms.Form):
     )
 
     def clean_username(self):
-        User = get_user_model()
-
         if not alnum_re.search(self.cleaned_data["username"]):
             raise forms.ValidationError(_("Usernames can only contain letters, numbers and underscores."))
-        qs = User.objects.filter(username__iexact=self.cleaned_data["username"])
+        User = get_user_model()
+        lookup_kwargs = get_user_lookup_kwargs({
+            "{username}__iexact": self.cleaned_data["username"]
+        })
+        qs = User.objects.filter(**lookup_kwargs)
         if not qs.exists():
             return self.cleaned_data["username"]
         raise forms.ValidationError(_("This username is already taken. Please choose another."))
@@ -99,10 +99,7 @@ class LoginForm(forms.Form):
         return self.cleaned_data
 
     def user_credentials(self):
-        return {
-            "username": self.cleaned_data[self.identifier_field],
-            "password": self.cleaned_data["password"],
-        }
+        return hookset.get_user_credentials(self, self.identifier_field)
 
 
 class LoginUsernameForm(LoginForm):
@@ -218,9 +215,3 @@ class SettingsForm(forms.Form):
         if not qs.exists() or not settings.ACCOUNT_EMAIL_UNIQUE:
             return value
         raise forms.ValidationError(_("A user is registered with this email address."))
-
-
-class SignupCodeForm(forms.ModelForm):
-    class Meta:
-        model = SignupCode
-        fields = ('code', 'max_uses', 'email', 'notes',)
